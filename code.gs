@@ -1,5 +1,5 @@
 // ========================================
-// GMAIL AUTO-DRAFT REPLY ADDON
+// GMAIL AUTO-DRAFT REPLY ADDON (GEMINI-READY)
 // ========================================
 
 /**
@@ -10,7 +10,6 @@ function createAutomatedDrafts() {
   try {
     // Get unread emails in inbox
     const threads = GmailApp.search('is:unread in:inbox', 0, 10);
-    
     if (threads.length === 0) {
       console.log('No unread emails found');
       return;
@@ -31,31 +30,83 @@ function createAutomatedDrafts() {
         return;
       }
       
+      // Skip if it is a meeting invitation
+      if (isMeetingInvite(latestMessage)) {
+        console.log('Skipping meeting invitation: ' + thread.getFirstMessageSubject());
+        return;
+      }
+      
       // Create automated draft
-      createDraftReply(thread, latestMessage);
+      createDraftForGemini(thread, latestMessage);
     });
-    
   } catch (error) {
     console.error('Error in createAutomatedDrafts:', error);
   }
 }
 
 /**
- * Creates a professional draft reply for a given email
+ * Creates a draft containing a prompt for Gemini
  */
-function createDraftReply(thread, message) {
+function createDraftForGemini(thread, message) {
   try {
     const analysis = analyzeEmail(message);
-    const draftContent = generateDraftReply(analysis, message);
+    const draftContent = generateGeminiPrompt(analysis); // <-- MODIFIED to call the new function
     
     // Create the draft
-    thread.createDraftReply(draftContent);
-    console.log('Draft created for: ' + thread.getFirstMessageSubject());
-    
+    thread.createDraftReply(draftContent, {
+      subject: `[GEMINI PROMPT] ${message.getSubject()}` // Adds a clear subject to the draft
+    });
+    console.log('Gemini prompt draft created for: ' + thread.getFirstMessageSubject());
   } catch (error) {
     console.error('Error creating draft reply:', error);
   }
 }
+
+// ======================= NEW FUNCTION START =======================
+/**
+ * Generates a detailed prompt for a generative AI model like Gemini.
+ */
+function generateGeminiPrompt(analysis) {
+  const senderFirstName = analysis.sender.split(' ')[0];
+
+  // The instruction for the AI model
+  let prompt = `**PROMPT FOR GEMINI:**
+Act as a helpful, professional executive assistant. Based on the following email context, please draft a clear, concise, and professional reply. Acknowledge the key requests and action items, and adopt a proactive and helpful tone. Sign off with "[Your Name]".
+
+---
+**EMAIL CONTEXT:**
+
+**From:** ${analysis.senderEmail}
+**Subject:** "${analysis.subject.replace(/^re:\s*/i, '')}"
+**Urgency Detected:** ${analysis.urgency}
+
+`;
+
+  // Add the identified requests to the context
+  if (analysis.asks.length > 0) {
+    prompt += `\n**Key Requests Identified:**\n`;
+    analysis.asks.forEach((ask, index) => {
+      prompt += `- ${ask}\n`;
+    });
+  }
+
+  // Add the identified action items to the context
+  if (analysis.actionItems.length > 0) {
+    prompt += `\n**Action Items Identified:**\n`;
+    analysis.actionItems.forEach((action, index) => {
+      prompt += `- ${action}\n`;
+    });
+  }
+  
+  prompt += `\n---
+**DRAFT THE REPLY BELOW:**`;
+
+  return prompt;
+}
+// ======================= NEW FUNCTION END =========================
+
+// (The rest of your functions: analyzeEmail, extractAsks, hasDraftReply, etc., remain the same)
+// ... paste all the other unchanged functions from the previous script here ...
 
 /**
  * Analyzes the email content to extract key information
@@ -80,7 +131,6 @@ function analyzeEmail(message) {
     meetingRequest: detectMeetingRequest(body),
     hasAttachments: message.getAttachments().length > 0
   };
-  
   return analysis;
 }
 
@@ -101,7 +151,6 @@ function extractAsks(body) {
     /we need (.*?)[\.\?\!]/gi,
     /requesting (.*?)[\.\?\!]/gi
   ];
-  
   askPatterns.forEach(pattern => {
     const matches = body.match(pattern);
     if (matches) {
@@ -113,7 +162,6 @@ function extractAsks(body) {
       });
     }
   });
-  
   // If no specific asks found, look for question marks
   if (asks.length === 0) {
     const questions = body.split(/[\.\!]/).filter(sentence => 
@@ -130,14 +178,12 @@ function extractAsks(body) {
  */
 function extractActionItems(body) {
   const actions = [];
-  const lowerBody = body.toLowerCase();
   
   // Look for action-oriented language
   const actionKeywords = [
     'review', 'approve', 'sign', 'complete', 'finish', 'send', 'submit',
     'schedule', 'meet', 'call', 'discuss', 'prepare', 'draft', 'update'
   ];
-  
   const sentences = body.split(/[\.\!\?]/).filter(s => s.trim().length > 15);
   
   sentences.forEach(sentence => {
@@ -149,7 +195,6 @@ function extractActionItems(body) {
       }
     }
   });
-  
   return actions.slice(0, 5); // Limit to 5 most relevant
 }
 
@@ -174,65 +219,21 @@ function detectMeetingRequest(body) {
 }
 
 /**
- * Generates professional draft reply content
+ * Detects if an email is a meeting invitation by checking for .ics attachments.
  */
-function generateDraftReply(analysis, originalMessage) {
-  const senderFirstName = analysis.sender.split(' ')[0];
-  
-  let draft = `Dear ${senderFirstName},\n\n`;
-  draft += `Thank you for your email regarding "${analysis.subject.replace(/^re:\s*/i, '')}".\n\n`;
-  
-  // Acknowledge the asks
-  if (analysis.asks.length > 0) {
-    draft += `**Key Requests Identified:**\n`;
-    analysis.asks.forEach((ask, index) => {
-      draft += `${index + 1}. ${ask}\n`;
-    });
-    draft += `\n`;
+function isMeetingInvite(message) {
+  const attachments = message.getAttachments();
+  if (attachments.length === 0) {
+    return false;
   }
   
-  // List action items
-  if (analysis.actionItems.length > 0) {
-    draft += `**Action Items:**\n`;
-    analysis.actionItems.forEach((action, index) => {
-      draft += `${index + 1}. ${action}\n`;
-    });
-    draft += `\n`;
-  }
-  
-  // Suggested response based on content analysis
-  draft += `**Proposed Response:**\n`;
-  
-  if (analysis.urgency === 'High') {
-    draft += `I understand this is time-sensitive and will prioritize accordingly. `;
-  }
-  
-  if (analysis.meetingRequest) {
-    draft += `I'm available for a discussion and will coordinate with my calendar to find a suitable time. `;
-  }
-  
-  if (analysis.asks.length > 0) {
-    draft += `I will review the requested items and provide a comprehensive response by [INSERT TIMELINE]. `;
-  }
-  
-  if (analysis.hasAttachments) {
-    draft += `I will also review the attached documents and incorporate any relevant information in my response. `;
-  }
-  
-  draft += `Please let me know if you need any clarification or if there are additional priorities I should consider.\n\n`;
-  
-  // Professional closing
-  draft += `Best regards,\n`;
-  draft += `[Your Name]\n`;
-  draft += `[Your Title]\n\n`;
-  
-  // Add metadata for reference
-  draft += `---\n`;
-  draft += `*This draft was automatically generated for efficiency. Please review and customize before sending.*\n`;
-  draft += `*Original sender: ${analysis.senderEmail}*\n`;
-  draft += `*Urgency level: ${analysis.urgency}*`;
-  
-  return draft;
+  return attachments.some(attachment => {
+    const contentType = attachment.getContentType();
+    const fileName = attachment.getName().toLowerCase();
+    
+    // Standard way to identify calendar invites
+    return contentType === 'text/calendar' || fileName.endsWith('.ics');
+  });
 }
 
 /**
@@ -262,13 +263,11 @@ function setupAutomaticTrigger() {
       ScriptApp.deleteTrigger(trigger);
     }
   });
-  
   // Create new trigger
   ScriptApp.newTrigger('createAutomatedDrafts')
     .timeBased()
     .everyMinutes(15)
     .create();
-    
   console.log('Automatic trigger set up successfully');
 }
 
@@ -280,43 +279,4 @@ function testAutoDrafts() {
   console.log('Starting manual test of auto-draft creation...');
   createAutomatedDrafts();
   console.log('Test completed. Check your Gmail drafts.');
-}
-
-// ========================================
-// UTILITY FUNCTIONS
-// ========================================
-
-/**
- * Clean up old triggers (maintenance function)
- */
-function cleanupTriggers() {
-  ScriptApp.getProjectTriggers().forEach(trigger => {
-    ScriptApp.deleteTrigger(trigger);
-  });
-  console.log('All triggers cleaned up');
-}
-
-/**
- * Get addon status and statistics
- */
-function getAddonStatus() {
-  const triggers = ScriptApp.getProjectTriggers();
-  const activeTrigger = triggers.find(t => t.getHandlerFunction() === 'createAutomatedDrafts');
-  
-  console.log('=== ADDON STATUS ===');
-  console.log('Active triggers:', triggers.length);
-  console.log('Auto-draft trigger active:', !!activeTrigger);
-  
-  if (activeTrigger) {
-    console.log('Trigger type:', activeTrigger.getEventType());
-  }
-  
-  // Count recent drafts
-  const recentDrafts = GmailApp.getDrafts().filter(draft => {
-    const created = draft.getMessage().getDate();
-    const oneDayAgo = new Date(Date.now() - 24*60*60*1000);
-    return created > oneDayAgo;
-  });
-  
-  console.log('Drafts created in last 24h:', recentDrafts.length);
 }
